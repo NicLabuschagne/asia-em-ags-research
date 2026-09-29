@@ -37,6 +37,14 @@ contract panel and the liquid rolled series (`notebooks/ym_corn_arb.ipynb`), and
 a cointegration and half-life study of the DCE crush spread
 (`notebooks/crush_spread_vecm.ipynb`).
 
+**DCE soybean crush** — whether the Chinese crush margin is a stationary, tradeable
+spread. It is, on No.2 (imported) beans rather than No.1: mean +81 CNY/t, 28-day
+half-life, and no time-varying level — a plain AR(1) beats both Kalman variants on
+AIC, so the 2022–24 collapse was a long excursion, not a regime shift. The spread is
+a good fair-value map and a poor book: at 1.3 bets a year the Sharpe degrades by
+exactly √(time in market). `notebooks/asia_analysis.ipynb`, written up in
+`notebooks/dce_crush_findings.md`.
+
 ## Layout
 
     src/features.py    feature generation
