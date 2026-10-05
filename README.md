@@ -1,4 +1,4 @@
-# SAFEX commodity research
+# Emerging Market commodity research
 
 Quantitative research on JSE/SAFEX grain — white and yellow maize primarily — with
 CBOT corn and USDZAR as the cross-market legs. The recurring object of interest is
