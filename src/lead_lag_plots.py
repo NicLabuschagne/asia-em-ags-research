@@ -185,10 +185,24 @@ def plot_event_study(out: dict, horizon=10, ax=None):
     return ax
 
 
+def _trades(out: dict, book: str) -> pd.DataFrame:
+    """
+    One row per trade: its side and net return in bps. A trade = consecutive days holding
+    the same non-zero position, the same definition lead_lag.metrics() uses.
+    """
+    pnl = out["pnl"][book]
+    held = out["positions"][book].shift(1).fillna(0).reindex(pnl.index)   # decided at close t, held over t+1
+    trade_id = (held != held.shift(1)).cumsum()
+    days = pd.DataFrame({"side": np.sign(held), "pnl": pnl, "id": trade_id})[held != 0]
+    trades = days.groupby("id").agg(side=("side", "first"), net=("pnl", "sum"))
+    trades["net_bps"] = trades["net"] * 1e4
+    return trades
+
+
 def plot_trade_returns(out: dict, book="lead_lag", ax=None):
     """Histogram of net return per trade (bps), long and short separately."""
     ax = _axes(ax)
-    trades = out["pnl"][book]
+    trades = _trades(out, book)
     bins = np.linspace(trades["net_bps"].quantile(0.01), trades["net_bps"].quantile(0.99), 40)
     for side, color, label in [(1, PALETTE[0], "long"), (-1, PALETTE[1], "short")]:
         subset = trades.loc[trades["side"] > 0 if side > 0 else trades["side"] < 0, "net_bps"]

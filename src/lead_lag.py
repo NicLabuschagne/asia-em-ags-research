@@ -282,7 +282,8 @@ def run(cfg: Config = Config()) -> dict:
         pnl[name] = net
     table = pd.DataFrame(results)
     yearly = pd.DataFrame({name: series.groupby(series.index.year).sum() * 100 for name, series in pnl.items()})
-    return {"curve": curve, "signals": signals, "positions": books, "pnl": pnl, "metrics": table, "yearly": yearly}
+    return {"config": cfg, "curve": curve, "signals": signals, "positions": books, "pnl": pnl,
+            "metrics": table, "yearly": yearly}
 
 
 if __name__ == "__main__":
