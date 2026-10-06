@@ -30,12 +30,14 @@ Method in brief
    otherwise; flat when the 1-day divergence points the other way. Combined = both netted.
 7. Backtest: position decided at close t earns M1's return on day t+1; costs per side on every
    position change, plus a roll (close + reopen) on main-switch days while in a position.
+   Every trading day after the first scored close is evaluated, including days when M3 is not
+   listed (books are flat then unless a slow trade is still running), so 252 days = 1 year.
 
-Expected output on the DCE soymeal file (2018-2026) - use it to check your copy:
-    fast Sharpe 0.73, slow 1.62, lead-lag 1.79, baseline curve state 1.28, combined 1:1 1.80
-(The research scripts showed 1.33 / 1.83 for the last two: they treated a missing slope on
-10 main-switch days, when M3 is not yet listed, as contango. Here a missing slope is not
-treated as contango, which is the more defensible rule.)
+Expected output on the DCE soymeal file (2019-2026, slow_hold_days=5) - use it to check your copy:
+    fast Sharpe 0.52, slow 1.37, lead-lag 1.47, baseline curve state 0.91, combined 1:1 1.40
+(Earlier versions showed 0.73 / 1.62 / 1.79 / 1.28 / 1.80: they evaluated only the 1-2 days after
+a scored close, about half of all trading days, which dropped held P&L and inflated annualised
+figures. Earlier still, a missing slope was treated as contango; here it is not.)
 """
 
 from __future__ import annotations
@@ -59,6 +61,10 @@ class Config:
     slow_hold_days: int = 5
     cost_per_side: float = 0.00035  # 3.5 bps: about 1 tick + fees per side
     split_date: str = "2022-07-01"  # for the before/after stability check
+    vol_filter: bool = False        # flatten every book on high-volatility closes
+    vol_window: int = 20            # days of M1 returns in the volatility measure
+    vol_quantile: float = 0.90      # "high" = above this percentile of its own past
+    vol_min_history: int = 252      # days of volatility history before the filter can switch on
 
 
 # ---------------------------------------------------------------------------
@@ -208,16 +214,27 @@ def baseline_curve_state(curve: pd.DataFrame, signals: pd.DataFrame, divergence_
     return state.where(~opposes, 0)
 
 
+def high_volatility(curve: pd.DataFrame, cfg: Config) -> pd.Series:
+    """
+    True at close t when M1's 20-day volatility is above the 90th percentile of its own history
+    up to t-1. Uses only past data; off until there is a year of volatility history.
+    """
+    vol = curve["r_m1"].rolling(cfg.vol_window).std()
+    threshold = vol.expanding(min_periods=cfg.vol_min_history).quantile(cfg.vol_quantile).shift(1)
+    return (vol > threshold).fillna(False)
+
+
 # ---------------------------------------------------------------------------
 # 4. Backtest and metrics
 # ---------------------------------------------------------------------------
 def evaluation_days(signals: pd.DataFrame) -> pd.Series:
     """
-    Days whose signal date (previous close) could be scored. The extra day (two closes back)
-    keeps the window identical to the delayed-entry tests, so all books share the same days.
+    Every trading day after the first close that could be scored. Days when the signal cannot
+    be scored (M3 not listed) stay in: books are flat on them unless an earlier trade is still
+    held, and that trade's P&L must count. Keeping every day also makes 252 days = 1 year.
     """
     scored = signals["scored"]
-    return (scored.shift(1, fill_value=False) | scored.shift(2, fill_value=False)).astype(bool)
+    return scored.shift(1, fill_value=False).astype(bool).cummax()
 
 
 def backtest(position: pd.Series, curve: pd.DataFrame, cfg: Config, mask: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -274,6 +291,9 @@ def run(cfg: Config = Config()) -> dict:
         "baseline_curve_state": baseline,
         "combined_1to1": baseline + legs["lead_lag"],   # netted: one position per contract
     }
+    high_vol = high_volatility(curve, cfg)
+    if cfg.vol_filter:
+        books = {name: position.where(~high_vol, 0) for name, position in books.items()}
     mask = evaluation_days(signals)
     results, pnl = {}, {}
     for name, position in books.items():
@@ -283,7 +303,7 @@ def run(cfg: Config = Config()) -> dict:
     table = pd.DataFrame(results)
     yearly = pd.DataFrame({name: series.groupby(series.index.year).sum() * 100 for name, series in pnl.items()})
     return {"config": cfg, "curve": curve, "signals": signals, "positions": books, "pnl": pnl,
-            "metrics": table, "yearly": yearly}
+            "metrics": table, "yearly": yearly, "high_vol": high_vol}
 
 
 if __name__ == "__main__":

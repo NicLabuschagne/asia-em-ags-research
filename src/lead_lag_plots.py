@@ -121,15 +121,21 @@ def plot_drawdown(out: dict, books=DEFAULT_BOOKS, ax=None):
     return ax
 
 
-def plot_rolling_sharpe(out: dict, books=DEFAULT_BOOKS, window=252, ax=None):
-    """Sharpe over a trailing window (252 days = 1 year). Shows whether the edge is fading."""
+def plot_rolling_sharpe(out: dict, books=DEFAULT_BOOKS, window=126, ax=None):
+    """
+    Sharpe over a trailing window (126 trading days = 6 months). Shows whether the edge is fading.
+    Shaded band = +/-1.96 * sqrt(252 / window): a zero-edge strategy stays inside it 95% of the time,
+    so only readings outside the band say anything about the edge.
+    """
     ax = _axes(ax)
     for name in books:
         pnl = out["pnl"][name]
         rolling = pnl.rolling(window).mean() / pnl.rolling(window).std() * np.sqrt(252)
         ax.plot(rolling.index, rolling, color=BOOK_COLORS[name], label=name)
+    noise = 1.96 * np.sqrt(252 / window)
+    ax.axhspan(-noise, noise, color="#898781", alpha=0.12, lw=0, label=f"noise band (±{noise:.1f})")
     ax.axhline(0, color="#898781", lw=1)
-    ax.set_title(f"Rolling {window}-day Sharpe")
+    ax.set_title(f"Rolling {window}-trading-day Sharpe (about {window / 21:.0f} months)")
     ax.legend()
     return ax
 
