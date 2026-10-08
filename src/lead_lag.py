@@ -28,6 +28,9 @@ Method in brief
    lead_lag = fast + slow.
 6. Baseline curve state: short M1 in contango with a loosening 5-day slope (M1 vs M2), long
    otherwise; flat when the 1-day divergence points the other way. Combined = both netted.
+6b. Curve signal: sign of bm5 (M1's 5-day return minus M2's), averaged over the last 5 days, so
+   long when the front has gained on M2 and short when it has lost. Flat when the curve is not
+   scored. book() averages one book across several markets into an equal-weight portfolio.
 7. Backtest: position decided at close t earns M1's return on day t+1; costs per side on every
    position change, plus a roll (close + reopen) on main-switch days while in a position.
    Every trading day after the first scored close is evaluated, including days when M3 is not
@@ -65,6 +68,7 @@ class Config:
     vol_window: int = 20            # days of M1 returns in the volatility measure
     vol_quantile: float = 0.90      # "high" = above this percentile of its own past
     vol_min_history: int = 252      # days of volatility history before the filter can switch on
+    signal_hold_days: int = 5       # curve signal: days of daily signs averaged into the position
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +218,16 @@ def baseline_curve_state(curve: pd.DataFrame, signals: pd.DataFrame, divergence_
     return state.where(~opposes, 0)
 
 
+def curve_signal(signals: pd.DataFrame, cfg: Config) -> pd.Series:
+    """
+    Sign of bm5 (M1's 5-day return minus M2's): +1 when the front has gained on M2, -1 when it
+    has lost. The position is the mean of the last signal_hold_days signs, so it holds about a
+    week and steps between -1 and +1. A day the curve cannot be scored contributes 0.
+    """
+    daily = np.sign(signals["bm5"]).where(signals["valid"], 0).fillna(0)
+    return daily.rolling(cfg.signal_hold_days, min_periods=1).mean()
+
+
 def high_volatility(curve: pd.DataFrame, cfg: Config) -> pd.Series:
     """
     True at close t when M1's 20-day volatility is above the 90th percentile of its own history
@@ -290,6 +304,7 @@ def run(cfg: Config = Config()) -> dict:
         "lead_lag": legs["lead_lag"],
         "baseline_curve_state": baseline,
         "combined_1to1": baseline + legs["lead_lag"],   # netted: one position per contract
+        "curve_signal": curve_signal(signals, cfg),
     }
     high_vol = high_volatility(curve, cfg)
     if cfg.vol_filter:
@@ -304,6 +319,29 @@ def run(cfg: Config = Config()) -> dict:
     yearly = pd.DataFrame({name: series.groupby(series.index.year).sum() * 100 for name, series in pnl.items()})
     return {"config": cfg, "curve": curve, "signals": signals, "positions": books, "pnl": pnl,
             "metrics": table, "yearly": yearly, "high_vol": high_vol}
+
+
+def book(runs: dict[str, dict], name: str = "curve_signal", start: str | None = None) -> dict:
+    """
+    Equal-weight portfolio of one book across markets. runs = {market: output of run()}.
+    Starts on the first day every market is evaluated (or `start`); a market with no P&L that
+    day counts as 0. Returns per-market and book P&L, metrics, correlation and yearly returns.
+    """
+    pnl = pd.DataFrame({market: out["pnl"][name] for market, out in runs.items()})
+    first = max(series.first_valid_index() for _, series in pnl.items())
+    pnl = pnl[max(first, pd.Timestamp(start)) if start else first:].fillna(0)
+    pnl["book"] = pnl.mean(axis=1)
+    split = next(iter(runs.values()))["config"].split_date
+
+    def summary(x: pd.Series) -> dict:
+        equity = x.cumsum()
+        return {"sharpe": sharpe(x), "sharpe_before_split": sharpe(x[:split]), "sharpe_after_split": sharpe(x[split:]),
+                "ann_return_%": x.mean() * 252 * 100, "ann_vol_%": x.std() * np.sqrt(252) * 100,
+                "max_drawdown_%": (equity - equity.cummax()).min() * 100}
+
+    return {"pnl": pnl, "metrics": pd.DataFrame({col: summary(pnl[col]) for col in pnl}).T,
+            "correlation": pnl.drop(columns="book").corr(),
+            "yearly": pnl.groupby(pnl.index.year).sum() * 100}
 
 
 if __name__ == "__main__":
