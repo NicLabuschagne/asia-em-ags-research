@@ -1,7 +1,7 @@
 # Emerging Market and Asia Ags Research
 
 Quantitative research on emerging-market agricultural futures, in two markets:
-***All independent studies are in the notebooks folder, covering topics from factor/feature research, futures curve strategies and machine learning.***
+- ***All independent studies are in the notebooks folder, covering topics from factor/feature research, futures curve strategies and machine learning.***
 
 - **South Africa (JSE/SAFEX):** white and yellow maize, with CBOT corn and USDZAR as
   the cross-market legs. The object of interest is the SAFEX/CBOT
