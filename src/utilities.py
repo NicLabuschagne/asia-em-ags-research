@@ -739,3 +739,139 @@ def plot_equity_curve(returns: pd.Series, title: str = "Equity curve"):
     plt.show()
 
     return equity
+
+# ═══════════════════════════════════════════════════════════════════════
+# SIGNALS — 30 formulas as plain pandas
+# ═══════════════════════════════════════════════════════════════════════
+
+def _zscore(series: pd.Series, window: int) -> pd.Series:
+    m = series.rolling(window).mean()
+    s = series.rolling(window).std()
+    return (series - m) / s.replace(0, np.nan)
+
+
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, window: int) -> pd.Series:
+    prev_close = close.shift(1)
+    tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    return tr.rolling(window).mean()
+
+
+# --- Standard Atlas (4 families) ---
+
+def fade_breakout(df: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    """Short at new highs, long at new lows. Fade exhaustion moves."""
+    c = df["close"]
+    return_trade = (c - df['open']) / df['open']
+    prev_high = c.rolling(window).max().shift(1)
+    prev_low = c.rolling(window).min().shift(1)
+    signal = pd.Series(0.0, index=df.index)
+    signal[c > prev_high] = -1.0
+    signal[c < prev_low] = 1.0
+    strat_return = signal.shift(1) * return_trade
+    position = signal.shift(1)
+    return pd.DataFrame({"signal": signal, "strategy_return": strat_return, "bar_return": return_trade, "position": position})
+
+
+def fade_ma(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Short above MA, long below MA. Mean reversion."""
+    c = df["close"]
+    ma = c.rolling(window).mean()
+    signal = pd.Series(0.0, index=df.index)
+    signal[c > ma] = -1.0
+    signal[c < ma] = 1.0
+    return signal
+
+
+def cs_reversion(prices: dict[str, pd.DataFrame], window: int = 20) -> dict[str, pd.Series]:
+    """Cross-sectional reversion: fade relative strength across assets.
+    Requires multiple assets. Returns dict of {ticker: signal}.
+    """
+    ratios = {}
+    for ticker, df in prices.items():
+        c = df["close"]
+        ma = c.rolling(window).mean()
+        ratios[ticker] = c / ma
+    ratio_df = pd.DataFrame(ratios)
+    mean = ratio_df.mean(axis=1)
+    std = ratio_df.std(axis=1).replace(0, np.nan)
+    zscores = ratio_df.sub(mean, axis=0).div(std, axis=0)
+    return {ticker: -zscores[ticker] for ticker in prices}
+
+
+def mean_reversion(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Negative z-score of close. Short when extended, long when depressed."""
+    return -_zscore(df["close"], window)
+
+
+# --- Exotic Atlas (6 families) ---
+
+def skew_fade(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Negative rolling skewness. Fade distributional asymmetry."""
+    return -df["close"].rolling(window).skew()
+
+
+def keltner_reversion(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Deviation from MA normalised by ATR. Robust mean reversion."""
+    c = df["close"]
+    ma = c.rolling(window).mean()
+    atr = _atr(df["high"], df["low"], c, window)
+    return -(c - ma) / atr.replace(0, np.nan)
+
+
+def accel_fade(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Fade the second derivative of price. Captures momentum exhaustion."""
+    accel = df["close"].diff().diff()
+    return -_zscore(accel, window)
+
+
+def ret_z_reversion(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Z-score of 1-bar returns. Fade extreme recent moves."""
+    c = df["close"]
+    return -_zscore(c / c.shift(1), window)
+
+
+def skewkurt_fade(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Skewness x kurtosis. Combines direction with tail thickness."""
+    c = df["close"]
+    return -c.rolling(window).skew() * c.rolling(window).kurt()
+
+
+def fractal_trend(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Range efficiency x z-score. The only trend-following signal."""
+    c = df["close"]
+    range_ = c.rolling(window).max() - c.rolling(window).min()
+    noise = c.diff().abs().rolling(window).sum()
+    efficiency = range_ / noise.replace(0, np.nan)
+    return efficiency * _zscore(c, window)
+
+
+# --- Signal registry ---
+
+LOOKBACKS = [5, 20, 120]
+
+_FAMILIES = [
+    (fade_breakout,     "Fade-BO",       False),
+    (fade_ma,           "Fade-MA",       False),
+    (cs_reversion,      "CS-Rev",        True),
+    (mean_reversion,    "MR",            False),
+    (skew_fade,         "Skew-Fade",     False),
+    (keltner_reversion, "Keltner-Rev",   False),
+    (accel_fade,        "Accel-Fade",    False),
+    (ret_z_reversion,   "Ret-Z-Rev",     False),
+    (skewkurt_fade,     "SkewKurt",      False),
+    (fractal_trend,     "Fractal-Trend", False),
+]
+
+SIGNAL_REGISTRY = []
+for _func, _family, _cs in _FAMILIES:
+    for _lb in LOOKBACKS:
+        SIGNAL_REGISTRY.append({
+            "name": f"{_family} {_lb}", "family": _family,
+            "lookback": _lb, "function": _func, "cross_sectional": _cs,
+        })
+
+
+def list_signals() -> pd.DataFrame:
+    return pd.DataFrame([{"name": s["name"], "family": s["family"], "lookback": s["lookback"]}
+                         for s in SIGNAL_REGISTRY])
+
